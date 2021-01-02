@@ -238,6 +238,7 @@ func (f *sendReceiveFolder) pullerIteration(scanChan chan<- string) int {
 	copyChan := make(chan copyBlocksState)
 	finisherChan := make(chan *sharedPullerState)
 	dbUpdateChan := make(chan dbUpdateJob)
+	inPlaceChan := make(chan inPlaceFile)
 
 	pullWg := sync.NewWaitGroup()
 	copyWg := sync.NewWaitGroup()
@@ -276,7 +277,7 @@ func (f *sendReceiveFolder) pullerIteration(scanChan chan<- string) int {
 		doneWg.Done()
 	}()
 
-	changed, fileDeletions, dirDeletions, err := f.processNeeded(snap, dbUpdateChan, copyChan, scanChan)
+	changed, fileDeletions, dirDeletions, err := f.processNeeded(snap, dbUpdateChan, copyChan, scanChan, inPlaceChan)
 
 	// Signal copy and puller routines that we are done with the in data for
 	// this iteration. Wait for them to finish.
@@ -303,7 +304,7 @@ func (f *sendReceiveFolder) pullerIteration(scanChan chan<- string) int {
 	return changed
 }
 
-func (f *sendReceiveFolder) processNeeded(snap *db.Snapshot, dbUpdateChan chan<- dbUpdateJob, copyChan chan<- copyBlocksState, scanChan chan<- string) (int, map[string]protocol.FileInfo, []protocol.FileInfo, error) {
+func (f *sendReceiveFolder) processNeeded(snap *db.Snapshot, dbUpdateChan chan<- dbUpdateJob, copyChan chan<- copyBlocksState, scanChan chan<- string, inPlaceChan chan<- inPlaceFile) (int, map[string]protocol.FileInfo, []protocol.FileInfo, error) {
 	changed := 0
 	var dirDeletions []protocol.FileInfo
 	fileDeletions := map[string]protocol.FileInfo{}
@@ -496,7 +497,7 @@ nextFile:
 		for _, dev := range devices {
 			if _, ok := f.model.Connection(dev); ok {
 				// Handle the file normally, by coping and pulling, etc.
-				f.handleFile(fi, snap, copyChan)
+				f.handleFile(fi, snap, copyChan, inPlaceChan)
 				continue nextFile
 			}
 		}
@@ -1035,36 +1036,37 @@ func (f *sendReceiveFolder) renameFile(cur, source, target protocol.FileInfo, sn
 // |      handleFile       | - - - - > ItemFinished (on shortcuts)
 // |                       |
 // +-----------------------+
-//             |
-//             | copyChan (copyBlocksState; unless shortcut taken)
-//             |
-//             |    +-----------------------+
-//             |    | +-----------------------+
-//             +--->| |                       |
-//                  | |     copierRoutine     |
-//                  +-|                       |
-//                    +-----------------------+
-//                                |
-//                                | pullChan (sharedPullerState)
-//                                |
-//                                |   +-----------------------+
-//                                |   | +-----------------------+
-//                                +-->| |                       |
-//                                    | |     pullerRoutine     |
-//                                    +-|                       |
-//                                      +-----------------------+
-//                                                  |
-//                                                  | finisherChan (sharedPullerState)
-//                                                  |
-//                                                  |   +-----------------------+
-//                                                  |   |                       |
-//                                                  +-->|    finisherRoutine    | - - - - > ItemFinished
-//                                                      |                       |
-//                                                      +-----------------------+
+//   |         |
+//   |         | copyChan (copyBlocksState; unless shortcut taken)
+//   |         |
+//   |         |    +-----------------------+
+//   |         |    | +-----------------------+
+//   |         +--->| |                       |
+//   |              | |     copierRoutine     |
+//   |              +-|                       |
+//   |                +-----------------------+
+//   |                            |
+//   |                            | pullChan (sharedPullerState)
+//   |                            |
+//   |                            |   +-----------------------+
+//   |                            |   | +-----------------------+
+//   |                            +-->| |                       |
+//   |                                | |     pullerRoutine     |
+//   |                                +-|                       |
+//   |                                  +-----------------------+
+//   |                                              |
+//   |                                              | finisherChan (sharedPullerState)
+//   |                                              |
+//   |                                              |   +-----------------------+
+//   |                                              |   |                       |
+//   |                                              +-->|    finisherRoutine    | - - - - > ItemFinished
+//   |                                                  |                       |
+//   |                                                  +-----------------------+
+//  [inPlaceFileHandlerRoutine]
 
 // handleFile queues the copies and pulls as necessary for a single new or
 // changed file.
-func (f *sendReceiveFolder) handleFile(file protocol.FileInfo, snap *db.Snapshot, copyChan chan<- copyBlocksState) {
+func (f *sendReceiveFolder) handleFile(file protocol.FileInfo, snap *db.Snapshot, copyChan chan<- copyBlocksState, inPlaceChan chan<- inPlaceFile) {
 	curFile, hasCurFile := snap.Get(protocol.LocalDeviceID, file.Name)
 
 	have, _ := blockDiff(curFile.Blocks, file.Blocks)
@@ -1134,12 +1136,19 @@ func (f *sendReceiveFolder) handleFile(file protocol.FileInfo, snap *db.Snapshot
 
 	l.Debugf("%v need file %s; copy %d, reused %v", f, file.Name, len(blocks), len(reused))
 
-	cs := copyBlocksState{
-		sharedPullerState: s,
-		blocks:            blocks,
-		have:              len(have),
+	if shouldDoInPlaceUpdate(s) {
+		f := inPlaceFile{
+			sharedPullerState: s,
+		}
+		inPlaceChan <- f
+	} else {
+		cs := copyBlocksState{
+			sharedPullerState: s,
+			blocks:            blocks,
+			have:              len(have),
+		}
+		copyChan <- cs
 	}
-	copyChan <- cs
 }
 
 // blockDiff returns lists of common and missing (to transform src into tgt)

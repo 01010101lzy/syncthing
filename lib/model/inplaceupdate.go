@@ -1,6 +1,8 @@
 package model
 
-import "github.com/syncthing/syncthing/lib/protocol"
+import (
+	"github.com/syncthing/syncthing/lib/protocol"
+)
 
 // Calculate whether the file should be updated in-place from current file status.
 func shouldDoInPlaceUpdate(state *sharedPullerState) bool {
@@ -43,25 +45,20 @@ func shouldDoInPlaceUpdate(state *sharedPullerState) bool {
 	return true
 }
 
-// Perform in-place update for the given file.
-func doInPlaceUpdate() {
-	// it performs the following steps:
-	// 1. calculate update commands, write into a command file
-	// 2. lock the destination file from writes, if possible
-	//    lock other files we need to read from from writes, if possible
-	// 3. pull blocks from other devices, write into a delta file
-	// 4. perform the in-place update using the given commands
-	// 5. release locks
-
-}
-
 type inPlaceUpdateDeltaFile struct {
-	copies         []inPlaceCopyCommand            // topologically sorted in-file copy commands
-	externalCopies map[string][]inPlaceCopyCommand // blocks to copy from other files
-	pulls          []inPlacePullCommand            // blocks to be pulled from other devices
+	copies         []inPlaceCopyCommand         // topologically sorted in-file copy commands
+	externalCopies []inPlaceExternalCopyCommand // blocks to copy from other files
+	pulls          []inPlacePullCommand         // blocks to be pulled from other devices
 }
 
 type inPlaceCopyCommand struct {
+	sourceBlock int
+	destBlock   int
+}
+
+type inPlaceExternalCopyCommand struct {
+	folder      string
+	path        string
 	sourceBlock int
 	destBlock   int
 }
@@ -71,6 +68,58 @@ type inPlacePullCommand struct {
 	destBlock   int
 }
 
-func calculateDeltaFile(state *sharedPullerState) {
+type inPlaceFile struct {
+	*sharedPullerState
+}
+
+// inPlaceFileHandlerRoutine handles
+func (f *sendReceiveFolder) inPlaceFileHandlerRoutine(fileChan <-chan inPlaceFile) {
+	for file := range fileChan {
+		f.inPlaceFileHandlerIteration(file)
+
+	}
+}
+
+// inPlaceFileHandlerIteration handles the whole update procedure of a in-place file update.
+func (f *sendReceiveFolder) inPlaceFileHandlerIteration(file inPlaceFile) {
+	// this function performs the following steps:
+	// 1. calculate update commands, write into a command file
+	// 2. lock the destination file from writes, if possible
+	//    lock other files we need to read from from writes, if possible
+	// 3. pull blocks from other devices, write into a delta file
+	// 4. perform the in-place update using the given commands
+	// 5. release locks
 
 }
+
+// func calculateInPlaceDeltaFile(f *folder, state *sharedPullerState) (*inPlaceUpdateDeltaFile, error) {
+// 	// Most code of this function shares the same structure as sendReceiveFolder.copierRoutine
+
+// 	// The following code initializes hash finding stuff
+// 	folderFilesystems := make(map[string]fs.Filesystem)
+// 	folders := []string{f.folderID}
+// 	for folder, cfg := range f.model.cfg.Folders() {
+// 		folderFilesystems[folder] = cfg.Filesystem()
+// 		if folder != f.folderID {
+// 			folders = append(folders, folder)
+// 		}
+// 	}
+
+// 	copies := make([]inPlaceCopyCommand, 0)
+// 	externalCopies := make([]inPlaceCopyCommand, 0)
+
+// 	for _, block := range state.file.Blocks {
+// 		select {
+// 		case <-f.ctx.Done():
+// 			err := errors.Wrap(f.ctx.Err(), "folder stopped")
+// 			return nil, err
+// 		default:
+// 		}
+
+// 		f.model.finder.Iterate(folders, block.Hash, func(folder, path string, blockId int32) bool {
+
+// 		})
+// 	}
+
+// 	return nil, nil
+// }

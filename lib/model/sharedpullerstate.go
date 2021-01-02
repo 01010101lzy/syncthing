@@ -33,6 +33,7 @@ type sharedPullerState struct {
 	sparse      bool
 	created     time.Time
 	fsync       bool
+	isInPlace   bool // whether this fill pulling is in-place
 
 	// Mutable, must be locked for access
 	err               error           // The first error we hit
